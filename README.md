@@ -1,6 +1,9 @@
 # Slug's Ergo Launcher
 
+AI Disclosure. This app was entirely vibe coded, run at your own risk. 
+
 An Android home launcher built for one-handed use. Every app lives on a quarter wheel anchored in the bottom corner of the screen, within easy thumb reach.
+
 
 ## How it works
 
