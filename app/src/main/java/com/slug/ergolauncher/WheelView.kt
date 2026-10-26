@@ -16,8 +16,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.animation.DecelerateInterpolator
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -82,6 +84,14 @@ class WheelView(
     private var dragS0 = 0f
     private var lastTick = -1
 
+    // ---- fling (momentum) ----
+    private var vel = 0f
+    private var velAng = 0f
+    private var velT = 0L
+    private var flingRun: Runnable? = null
+    private var flingV = 0f
+    private var flingLast = 0L
+
     // ---- press-and-hold feedback ----
     private var holdRunnable: Runnable? = null
     private var pressing = false
@@ -143,7 +153,10 @@ class WheelView(
         return Math.toDegrees(atan2((pivY() - y).toDouble(), dx.toDouble())).toFloat()
     }
 
-    private fun targetBig(s: Int): Float = (if (s == 0) 150f else 320f) * prefs.wheelSize * u
+    /** Disc radius in dp when open. Grows when the comfort zone pushes icons further out. */
+    private fun discDp(): Float = max(320f, reachDp() + 60f)
+
+    private fun targetBig(s: Int): Float = (if (s == 0) 150f else discDp()) * prefs.wheelSize * u
     private fun targetBtn(s: Int): Float = (if (s == 0) 150f else 80f) * prefs.wheelSize * u
 
     private fun lo(n: Int, step: Float): Float = min(0f, 82f - (START + step * (n - 1)))
@@ -238,7 +251,48 @@ class WheelView(
         return true
     }
 
+    private fun cancelFling() {
+        flingRun?.let { removeCallbacks(it) }
+        flingRun = null
+    }
+
+    /** Keeps the ring turning after a flick, slowing down smoothly. v is in degrees per second. */
+    private fun startFling(v: Float) {
+        cancelFling()
+        val st = stage
+        flingV = v.coerceIn(-1800f, 1800f)
+        flingLast = SystemClock.uptimeMillis()
+        val r = object : Runnable {
+            override fun run() {
+                if (stage != st) return
+                val now = SystemClock.uptimeMillis()
+                val dt = min(0.032f, (now - flingLast) / 1000f)
+                flingLast = now
+                val cur = if (st == 1) cscroll else scroll
+                val want = cur + flingV * dt
+                val nv = clampFor(st, want)
+                val step = if (st == 1) CSTEP else astep()
+                val idx = (-nv / step).roundToInt()
+                if (idx != lastTick) {
+                    lastTick = idx
+                    haptic(HapticFeedbackConstants.CLOCK_TICK)
+                }
+                if (st == 1) cscroll = nv else scroll = nv
+                flingV *= exp(-3.5f * dt)
+                invalidate()
+                if (abs(flingV) < 25f || nv != want) {
+                    flingRun = null
+                } else {
+                    postOnAnimation(this)
+                }
+            }
+        }
+        flingRun = r
+        postOnAnimation(r)
+    }
+
     private fun setStage(s: Int) {
+        cancelFling()
         stage = s
         host?.onSearchMode(s == 2 && cat == Folders.RECENT)
         animateGeometry()
@@ -335,7 +389,9 @@ class WheelView(
         text.color = cLight
         text.alpha = a255(a)
         text.setShadowLayer(3 * u, 0f, u, Color.argb(180, 0, 0, 0))
-        c.drawText(s, cx, baseline, text)
+        val half = text.measureText(s) / 2 + 6 * u
+        val x = if (width > 0) cx.coerceIn(half, max(half, width - half)) else cx
+        c.drawText(s, x, baseline, text)
         text.clearShadowLayer()
     }
 
@@ -372,7 +428,7 @@ class WheelView(
         val len = if (loV < 0) (78f * 90f / (90f - loV)).coerceIn(14f, 78f) else 78f
         val pos = if (loV < 0) (sc / loV).coerceIn(0f, 1f) else 0f
         val t0 = 6f + pos * (78f - len)
-        val r = (320f * k - 10f) * u
+        val r = (discDp() * k - 10f) * u
 
         stroke.strokeWidth = 5 * u
         stroke.strokeCap = Paint.Cap.ROUND
@@ -533,6 +589,8 @@ class WheelView(
                     val inside = stage >= 1 && hypot(e.x - pivX(), e.y - pivY()) <= bigR
                     if (!inside) return false
                 }
+                cancelFling()
+                vel = 0f
                 downHit = h
                 downX = e.x
                 downY = e.y
@@ -541,6 +599,8 @@ class WheelView(
                 dragging = stage >= 1 && (h == null || h.kind == 1 || h.kind == 2)
                 if (dragging) {
                     dragA0 = ang(e.x, e.y)
+                    velAng = dragA0
+                    velT = SystemClock.uptimeMillis()
                     dragS0 = if (stage == 1) cscroll else scroll
                     lastTick = -1
                 }
@@ -574,6 +634,14 @@ class WheelView(
                         haptic(HapticFeedbackConstants.CLOCK_TICK)
                     }
                     if (stage == 1) cscroll = nv else scroll = nv
+                    val now = SystemClock.uptimeMillis()
+                    val a = ang(e.x, e.y)
+                    val dtm = now - velT
+                    if (dtm > 0) {
+                        vel = vel * 0.5f + ((a - velAng) / dtm * 1000f) * 0.5f
+                        velAng = a
+                        velT = now
+                    }
                     invalidate()
                 }
                 return true
@@ -582,6 +650,11 @@ class WheelView(
                 val wasLong = longFired
                 val h = downHit
                 cancelHold()
+                if (moved && dragging && !wasLong && abs(vel) > 80f &&
+                    SystemClock.uptimeMillis() - velT < 90
+                ) {
+                    startFling(vel)
+                }
                 if (!moved && !wasLong && h != null) click(h)
                 invalidate()
                 return true
@@ -742,6 +815,7 @@ class WheelView(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         cancelHold()
+        cancelFling()
         geoAnim?.cancel()
         uiHandler.removeCallbacks(disarm)
     }

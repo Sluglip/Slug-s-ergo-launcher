@@ -79,7 +79,7 @@ class Prefs(context: Context) {
 
     /** Radius in dp of the outermost app lane: how far the icons sit from the corner. */
     var reach: Int
-        get() = sp.getInt("reach", 232).coerceIn(160, 270)
+        get() = sp.getInt("reach", 232).coerceIn(160, 310)
         set(v) = sp.edit().putInt("reach", v).apply()
 
     /** Widget canvas as JSON: [{id,x,y,w,h}] in dp. Empty string means never saved. */
