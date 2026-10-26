@@ -39,6 +39,7 @@ class WheelView(
     interface Host {
         fun onSearchMode(on: Boolean)
         fun onSettings()
+        fun onRemoveFavorite(app: AppEntry, done: () -> Unit)
         fun onLaunch(app: AppEntry)
         fun onUninstall(app: AppEntry)
         fun toast(msg: String)
@@ -113,11 +114,9 @@ class WheelView(
     private val icGrid = glyph(R.drawable.ic_grid)
     private val icBack = glyph(R.drawable.ic_back)
     private val icTrash = glyph(R.drawable.ic_trash)
-    private val icGear = glyph(R.drawable.ic_gear)
 
     companion object {
         private const val START = 12f
-        private const val ASTEP = 13f
         private const val CSTEP = 26f
         private const val MINA = -2f
         private const val MAXA = 94f
@@ -149,7 +148,36 @@ class WheelView(
 
     private fun lo(n: Int, step: Float): Float = min(0f, 82f - (START + step * (n - 1)))
 
-    private fun catCount(): Int = if (moving != null) Folders.NAMES.size else Folders.NAMES.size - 1
+    /** Angle between neighbouring apps. A single lane needs more room than a zigzag. */
+    private fun astep(): Float = when (prefs.rows) {
+        1 -> 15f
+        2, 3 -> 13f
+        else -> 14f
+    }
+
+    private fun ringIds(): List<Int> = if (moving != null) Folders.RING_MOVE else Folders.RING
+
+    private fun catCount(): Int = ringIds().size
+
+    /** Outermost lane radius in dp, widened if the chosen number of rows needs more room. */
+    private fun reachDp(): Float = max(prefs.reach.toFloat(), 110f + 30f * (prefs.rows - 1))
+
+    /** Radius in dp of the given lane index (0 = outermost) for the current number of rows. */
+    private fun laneR(lane: Int): Float {
+        val n = prefs.rows
+        if (n == 1) return reachDp()
+        val gap = min(54f, (reachDp() - 110f) / (n - 1))
+        return reachDp() - gap * lane
+    }
+
+    /** Triangle wave so apps zigzag: 0,1,2,1,0,1,2... */
+    private fun laneOf(i: Int): Int {
+        val n = prefs.rows
+        if (n == 1) return 0
+        val period = 2 * (n - 1)
+        val m = i % period
+        return if (m < n) m else period - m
+    }
 
     private fun curList(): List<AppEntry> {
         if (cat == Folders.RECENT && query.isNotBlank()) {
@@ -163,7 +191,7 @@ class WheelView(
 
     private fun clampFor(s: Int, v: Float): Float {
         val n = if (s == 1) catCount() else curList().size
-        return max(lo(n, if (s == 1) CSTEP else ASTEP), min(0f, v))
+        return max(lo(n, if (s == 1) CSTEP else astep()), min(0f, v))
     }
 
     private fun lum(c: Int): Float {
@@ -269,7 +297,6 @@ class WheelView(
             canvas.drawCircle(pivX(), pivY(), bigR, stroke)
             drawScrollbar(canvas, k, accent)
             if (stage == 1) drawCats(canvas, k, accent) else drawApps(canvas, k, accent)
-            drawRingLabel(canvas)
             drawSideButtons(canvas)
         }
         drawBackButton(canvas, accent, fg)
@@ -339,7 +366,7 @@ class WheelView(
 
     private fun drawScrollbar(c: Canvas, k: Float, accent: Int) {
         val n = if (stage == 1) catCount() else curList().size
-        val step = if (stage == 1) CSTEP else ASTEP
+        val step = if (stage == 1) CSTEP else astep()
         val loV = lo(n, step)
         val sc = if (stage == 1) cscroll else scroll
         val len = if (loV < 0) (78f * 90f / (90f - loV)).coerceIn(14f, 78f) else 78f
@@ -361,20 +388,22 @@ class WheelView(
         val isz = prefs.iconSize * u
         val half = isz / 2
         val count = catCount()
-        for (i in 0 until Folders.NAMES.size) {
+        val ids = ringIds()
+        for (i in 0 until count) {
+            val id = ids[i]
             val a = START + CSTEP * i + cscroll
-            if (i >= count || a <= MINA || a >= MAXA) continue
-            val r = 200f * k * u
+            if (a <= MINA || a >= MAXA) continue
+            val r = (reachDp() - 32f) * k * u
             val cx = px(r, a)
             val cy = py(r, a)
-            val border = if (moving != null && i == from) accent else cBorder
+            val border = if (moving != null && id == from) accent else cBorder
             drawBubble(c, cx, cy, half, border, cBubble, fade)
-            drawGlyph(c, catIcons[i], cx, cy, isz * 0.43f, cLight, fade)
-            if (prefs.labels != 0) drawText(c, Folders.NAMES[i], cx, cy - half - 6 * u, 11f, fade)
-            if (i != Folders.HIDDEN && repo.folderHasFresh(i)) {
+            drawGlyph(c, catIcons[id], cx, cy, isz * 0.43f, cLight, fade)
+            if (prefs.labels != 0) drawText(c, Folders.NAMES[id], cx, cy - half - 6 * u, 11f, fade)
+            if (id != Folders.HIDDEN && repo.folderHasFresh(id)) {
                 drawNewPill(c, cx + half * 0.35f, cy - half - 10 * u, fade)
             }
-            hits.add(Hit(1, i, cx, cy, half))
+            hits.add(Hit(1, id, cx, cy, half))
         }
     }
 
@@ -384,9 +413,9 @@ class WheelView(
         val half = isz / 2
         for (i in list.indices) {
             val app = list[i]
-            val a = START + ASTEP * i + scroll
+            val a = START + astep() * i + scroll
             if (a <= MINA || a >= MAXA) continue
-            val r = (if (i % 2 == 0) 232f else 172f) * k * u
+            val r = laneR(laneOf(i)) * k * u
             val cx = px(r, a)
             val cy = py(r, a)
             val pressed = pressing && pressKey == app.key
@@ -421,41 +450,6 @@ class WheelView(
         }
     }
 
-    private fun ringLabel(): String {
-        val m = moving
-        if (stage == 1) return if (m != null) "MOVE ${m.label.uppercase()} TO…" else "CATEGORIES"
-        var s = Folders.NAMES[cat].uppercase()
-        if (cat == Folders.OTHER) s += " · UNSORTED APPS"
-        if (cat == Folders.HIDDEN) s = "HIDDEN · HOLD AN APP TO MOVE IT OUT"
-        if (cat == Folders.RECENT) {
-            s = if (query.isNotBlank()) {
-                val n = curList().size
-                if (n > 0) "RESULTS · $n" else "NO MATCHES"
-            } else "RECENT"
-        }
-        return s
-    }
-
-    private fun drawRingLabel(c: Canvas) {
-        val s = ringLabel()
-        text.textSize = 13 * u
-        text.typeface = Typeface.DEFAULT_BOLD
-        text.letterSpacing = 0.12f
-        val w = text.measureText(s) + 20 * u
-        val h = 28 * u
-        val cy = pivY() - 374 * u
-        rect.set(20 * u, cy - h / 2, 20 * u + w, cy + h / 2)
-        fill.color = Color.argb(199, 18, 20, 26)
-        fill.alpha = 199
-        c.drawRoundRect(rect, h / 2, h / 2, fill)
-        text.color = cLight
-        text.alpha = 255
-        text.textAlign = Paint.Align.LEFT
-        c.drawText(s, 30 * u, cy + 4.5f * u, text)
-        text.textAlign = Paint.Align.CENTER
-        text.letterSpacing = 0f
-    }
-
     private fun drawSideButtons(c: Canvas) {
         val cx = if (prefs.left) width - 56 * u else 56 * u
         val cy = pivY() - 112 * u
@@ -466,11 +460,6 @@ class WheelView(
             drawGlyph(c, icTrash, cx, cy, 26 * u, Color.WHITE, 1f)
             drawText(c, if (delArm) "Tap again to uninstall" else "Uninstall", cx, cy + r + 16 * u, 11f, 1f)
             hits.add(Hit(3, 0, cx, cy, r))
-        } else if (stage == 2 && cat == Folders.RECENT) {
-            drawBubble(c, cx, cy, r, cBorder, cBubble, 1f)
-            drawGlyph(c, icGear, cx, cy, 26 * u, cLight, 1f)
-            drawText(c, "Settings", cx, cy + r + 16 * u, 11f, 1f)
-            hits.add(Hit(4, 0, cx, cy, r))
         }
     }
 
@@ -578,7 +567,7 @@ class WheelView(
                 }
                 if (moved && dragging) {
                     val nv = clampFor(stage, dragS0 + (ang(e.x, e.y) - dragA0))
-                    val step = if (stage == 1) CSTEP else ASTEP
+                    val step = if (stage == 1) CSTEP else astep()
                     val idx = (-nv / step).roundToInt()
                     if (idx != lastTick) {
                         lastTick = idx
@@ -619,13 +608,17 @@ class WheelView(
                 }
             }
             3 -> trash()
-            4 -> host?.onSettings()
             5 -> backTap()
         }
     }
 
     private fun chooseCat(k: Int) {
         val m = moving
+        if (k == Folders.LAUNCHER) {
+            haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+            host?.onSettings()
+            return
+        }
         if (m != null) {
             if (k == from) {
                 moving = null
@@ -639,11 +632,24 @@ class WheelView(
                 host?.toast("Recent fills itself in")
                 return
             }
+            if (k == Folders.FAVORITES) {
+                // Favorites is an extra: the app keeps its own folder and we return to it.
+                val already = repo.isFavorite(m)
+                repo.addFavorite(m)
+                moving = null
+                delArm = false
+                cat = from
+                scroll = 0f
+                haptic(HapticFeedbackConstants.LONG_PRESS)
+                host?.toast(if (already) "${m.label} is already in Favorites" else "Added ${m.label} to Favorites")
+                setStage(2)
+                return
+            }
             repo.move(m, k)
             moving = null
             delArm = false
             cat = k
-            scroll = lo(curList().size, ASTEP)
+            scroll = lo(curList().size, astep())
             haptic(HapticFeedbackConstants.LONG_PRESS)
             host?.toast(
                 if (k == Folders.HIDDEN) "${m.label} is now hidden"
@@ -691,6 +697,14 @@ class WheelView(
     }
 
     private fun startMove(app: AppEntry) {
+        if (cat == Folders.FAVORITES) {
+            haptic(HapticFeedbackConstants.LONG_PRESS)
+            host?.onRemoveFavorite(app) {
+                scroll = clampFor(2, scroll)
+                invalidate()
+            }
+            return
+        }
         moving = app
         from = cat
         cscroll = 0f

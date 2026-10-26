@@ -67,6 +67,8 @@ class SettingsActivity : Activity() {
         slider("Wheel size", 0.85f, 1.15f, 0.05f, prefs.wheelSize, { "${(it * 100).roundToInt()}%" }) { prefs.wheelSize = it }
         slider("Wheel opacity", 0.5f, 1f, 0.05f, prefs.wheelOpacity, { "${(it * 100).roundToInt()}%" }) { prefs.wheelOpacity = it }
         slider("Icon size", 44f, 64f, 2f, prefs.iconSize.toFloat(), { "${it.roundToInt()} dp" }) { prefs.iconSize = it.roundToInt() }
+        slider("Comfort zone: distance from corner", 160f, 270f, 10f, prefs.reach.toFloat(), { "${it.roundToInt()} dp" }) { prefs.reach = it.roundToInt() }
+        slider("App rows (staggered lanes)", 1f, 5f, 1f, prefs.rows.toFloat(), { "${it.roundToInt()}" }) { prefs.rows = it.roundToInt() }
         colorSection()
         segment("Operation", listOf("Right-handed", "Left-handed"), if (prefs.left) 1 else 0) { prefs.left = it == 1 }
         segment("Icon labels", listOf("Off", "Folders", "All"), prefs.labels) { prefs.labels = it }
@@ -79,7 +81,7 @@ class SettingsActivity : Activity() {
         head("HOLD TIMING")
         slider("Move or uninstall an app", 1f, 3f, 0.5f, prefs.holdMove, { "%.1f s".format(it) }) { prefs.holdMove = it }
         slider("Open Hidden folder", 1f, 3f, 0.5f, prefs.holdHidden, { "%.1f s".format(it) }) { prefs.holdHidden = it }
-        slider("Change a widget", 0.5f, 2f, 0.5f, prefs.holdWidget, { "%.1f s".format(it) }) { prefs.holdWidget = it }
+        slider("Add or edit a widget", 0.5f, 2f, 0.5f, prefs.holdWidget, { "%.1f s".format(it) }) { prefs.holdWidget = it }
 
         head("NEW APPS")
         switchRow(

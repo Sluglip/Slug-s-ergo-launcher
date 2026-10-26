@@ -30,6 +30,7 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
     private val fresh = HashSet<String>()
     private val recent = ArrayList<String>()
     private val known = HashSet<String>()
+    private val favs = ArrayList<String>()
     private val iconCache = HashMap<String, Drawable>()
 
     init {
@@ -42,9 +43,16 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         fresh.clear()
         recent.clear()
         known.clear()
+        favs.clear()
+        val v1 = prefs.sp.getInt("layoutV", 1) < 2
         try {
             val o = JSONObject(prefs.sp.getString("assign", "{}") ?: "{}")
-            for (k in o.keys()) assign[k] = o.getInt(k)
+            for (k in o.keys()) assign[k] = if (v1) Folders.fromV1(o.getInt(k)) else o.getInt(k)
+        } catch (e: Exception) {
+        }
+        try {
+            val a = JSONArray(prefs.sp.getString("favs", "[]") ?: "[]")
+            for (i in 0 until a.length()) favs.add(a.getString(i))
         } catch (e: Exception) {
         }
         try {
@@ -54,6 +62,7 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         }
         fresh.addAll(prefs.sp.getStringSet("fresh", emptySet()) ?: emptySet())
         known.addAll(prefs.sp.getStringSet("known", emptySet()) ?: emptySet())
+        if (v1) save()
     }
 
     private fun save() {
@@ -61,7 +70,11 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         for ((k, v) in assign) o.put(k, v)
         val a = JSONArray()
         for (r in recent) a.put(r)
+        val f = JSONArray()
+        for (x in favs) f.put(x)
         prefs.sp.edit()
+            .putInt("layoutV", 2)
+            .putString("favs", f.toString())
             .putString("assign", o.toString())
             .putString("recent", a.toString())
             .putStringSet("fresh", HashSet(fresh))
@@ -111,6 +124,7 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
             changed = true
         }
         if (recent.removeAll { !keys.contains(it) }) changed = true
+        if (favs.removeAll { !keys.contains(it) }) changed = true
 
         known.clear()
         known.addAll(keys)
@@ -134,11 +148,9 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
             ApplicationInfo.CATEGORY_NEWS -> return Folders.INTERNET
             ApplicationInfo.CATEGORY_MAPS,
             ApplicationInfo.CATEGORY_PRODUCTIVITY -> return Folders.UTILITIES
-            ApplicationInfo.CATEGORY_ACCESSIBILITY -> return Folders.SETTINGS
         }
         val p = a.pkg.lowercase()
         return when {
-            p.contains("settings") -> Folders.SETTINGS
             p.contains("dialer") || p.contains("contacts") || p.contains("messag") ||
                 p.contains("mms") || p.contains("sms") || p.contains("mail") -> Folders.COMMUNICATION
             p.contains("chrome") || p.contains("browser") || p.contains("firefox") -> Folders.INTERNET
@@ -154,12 +166,28 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
 
     fun inFolder(f: Int): List<AppEntry> {
         if (f == Folders.RECENT) return recent.mapNotNull { byKey[it] }
+        if (f == Folders.FAVORITES) return favs.mapNotNull { byKey[it] }
         return apps.filter { assign[it.key] == f }
     }
 
     fun move(a: AppEntry, folder: Int) {
         assign[a.key] = folder
+        if (folder == Folders.HIDDEN) favs.remove(a.key)
         save()
+    }
+
+    fun isFavorite(a: AppEntry): Boolean = favs.contains(a.key)
+
+    /** Adds the app to Favorites. It stays in its own folder too. */
+    fun addFavorite(a: AppEntry) {
+        if (!favs.contains(a.key)) {
+            favs.add(a.key)
+            save()
+        }
+    }
+
+    fun removeFavorite(a: AppEntry) {
+        if (favs.remove(a.key)) save()
     }
 
     fun touchRecent(key: String) {
@@ -209,7 +237,10 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         val o = JSONObject()
         val a = JSONObject()
         for ((k, v) in assign) a.put(k, v)
-        o.put("version", 1)
+        o.put("version", 2)
+        val fv = JSONArray()
+        for (x in favs) fv.put(x)
+        o.put("favs", fv)
         o.put("assign", a)
         val r = JSONArray()
         for (x in recent) r.put(x)
@@ -221,7 +252,13 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         return try {
             val o = JSONObject(text)
             val a = o.getJSONObject("assign")
-            for (k in a.keys()) assign[k] = a.getInt(k)
+            val old = o.optInt("version", 1) < 2
+            for (k in a.keys()) assign[k] = if (old) Folders.fromV1(a.getInt(k)) else a.getInt(k)
+            val fv = o.optJSONArray("favs")
+            if (fv != null) {
+                favs.clear()
+                for (i in 0 until fv.length()) favs.add(fv.getString(i))
+            }
             recent.clear()
             val r = o.optJSONArray("recent")
             if (r != null) for (i in 0 until r.length()) recent.add(r.getString(i))

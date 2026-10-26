@@ -8,13 +8,15 @@ An Android home launcher built for one-handed use. Every app lives on a quarter 
 ## How it works
 
 - **Start button:** a quarter disc in the corner. Tap it to open the folder ring.
-- **Folders:** Communication, Games, Internet, Media, Utilities, Settings, Other, Search / Recent. Sweep your thumb around the ring to scroll.
+- **Folders:** Favorites, Communication, Games, Internet, Media, Utilities, Other, Search / Recent, Launcher Settings. Sweep your thumb around the ring to scroll.
 - **Apps:** tap a folder to open its apps on a second ring. The Back button shrinks to a quarter of the wheel and steps you out one level.
+- **Favorites:** hold an app, then pick Favorites. The app stays in its own folder too. Hold an app inside Favorites to remove it from there.
 - **Move or uninstall:** press and hold an app. The folder ring comes back so you can pick a new folder, and a trash button appears on the opposite side of the screen.
 - **Hidden folder:** press and hold Back on the folder ring.
-- **Search / Recent:** shows recent apps and swaps the widgets for a search box. The settings button is here too.
+- **Search / Recent:** shows recent apps and swaps the widgets for a search box. 
 - **Auto-sort:** new apps go to the folder that matches the category they declare. Folders with new apps show a green NEW badge.
-- **Widgets:** press and hold either widget slot at the top to choose a widget.
+- **Widgets:** press and hold empty space anywhere on the home screen to add a widget. Hold a widget to edit it: drag to move, drag a corner to resize, tap the red X to remove, tap empty space to finish.
+- **Launcher Settings:** the last entry on the folder ring. It has the comfort zone distance and the number of app rows (1 to 5), plus colors, sizes and timings.
 - **Wallpaper:** your current system wallpaper shows behind everything.
 
 ## Get the app on your phone
@@ -33,4 +35,4 @@ Open the project in Android Studio and press Run, or run `gradle assembleDebug` 
 
 ## Status
 
-Version 0.1. This is a first native build of the design, so expect rough edges.
+Version 0.2. This is a first native build of the design, so expect rough edges.

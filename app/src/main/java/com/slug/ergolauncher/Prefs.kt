@@ -72,6 +72,21 @@ class Prefs(context: Context) {
         get() = sp.getInt("lastCat", -1)
         set(v) = sp.edit().putInt("lastCat", v).apply()
 
+    /** Number of staggered lanes on the app ring, 1 to 5. */
+    var rows: Int
+        get() = sp.getInt("rows", 3).coerceIn(1, 5)
+        set(v) = sp.edit().putInt("rows", v).apply()
+
+    /** Radius in dp of the outermost app lane: how far the icons sit from the corner. */
+    var reach: Int
+        get() = sp.getInt("reach", 232).coerceIn(160, 270)
+        set(v) = sp.edit().putInt("reach", v).apply()
+
+    /** Widget canvas as JSON: [{id,x,y,w,h}] in dp. Empty string means never saved. */
+    var widgetsJson: String
+        get() = sp.getString("widgets", "") ?: ""
+        set(v) = sp.edit().putString("widgets", v).apply()
+
     fun widgetId(slot: Int): Int = sp.getInt("widget$slot", -1)
 
     fun setWidgetId(slot: Int, id: Int) {
