@@ -87,6 +87,31 @@ class Prefs(context: Context) {
         get() = sp.getString("widgets", "") ?: ""
         set(v) = sp.edit().putString("widgets", v).apply()
 
+    /** Spacing of the folder ring as a percentage of the default angle (80 to 130). */
+    var folderSpacing: Int
+        get() = sp.getInt("folderSpacing", 100).coerceIn(70, 140)
+        set(v) = sp.edit().putInt("folderSpacing", v).apply()
+
+    /** Spacing of the app ring as a percentage of the default angle (80 to 130). */
+    var appSpacing: Int
+        get() = sp.getInt("appSpacing", 100).coerceIn(70, 140)
+        set(v) = sp.edit().putInt("appSpacing", v).apply()
+
+    /** Wheel skin id, see Skins. 0 is the plain glass disc, 10 is your own image. */
+    var skin: Int
+        get() = sp.getInt("skin", 0)
+        set(v) = sp.edit().putInt("skin", v).apply()
+
+    /** How much a skin is darkened so bubbles stay readable, 0 to 70 percent. */
+    var skinDim: Int
+        get() = sp.getInt("skinDim", 25).coerceIn(0, 70)
+        set(v) = sp.edit().putInt("skinDim", v).apply()
+
+    /** Bumped whenever a skin image changes so the wheel reloads it. */
+    var skinRev: Int
+        get() = sp.getInt("skinRev", 0)
+        set(v) = sp.edit().putInt("skinRev", v).apply()
+
     fun widgetId(slot: Int): Int = sp.getInt("widget$slot", -1)
 
     fun setWidgetId(slot: Int, id: Int) {

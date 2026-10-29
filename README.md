@@ -10,12 +10,13 @@ An Android home launcher built for one-handed use. Every app lives on a quarter 
 - **Start button:** a quarter disc in the corner. Tap it to open the folder ring.
 - **Folders:** Favorites, Communication, Games, Internet, Media, Utilities, Other, Search / Recent, Launcher Settings. Sweep your thumb around the ring to scroll.
 - **Apps:** tap a folder to open its apps on a second ring. The Back button shrinks to a quarter of the wheel and steps you out one level.
-- **Favorites:** hold an app, then pick Favorites. The app stays in its own folder too. Hold an app inside Favorites to remove it from there.
-- **Move or uninstall:** press and hold an app. The folder ring comes back so you can pick a new folder, and a trash button appears on the opposite side of the screen.
+- **App menu:** press and hold any app for a small menu: add or remove Favorites, pin or unpin Quickstart, Move, Hide, Uninstall. Favorites and Quickstart are shortcuts, so the app stays in its own folder. Move brings the folder ring back so you can pick the new folder.
+- **Quickstart:** pinned apps sit on the folder ring after a divider line. Keep sweeping past the folders to reach them.
 - **Hidden folder:** press and hold Back on the folder ring.
 - **Search / Recent:** shows recent apps and swaps the widgets for a search box. 
 - **Auto-sort:** new apps go to the folder that matches the category they declare. Folders with new apps show a green NEW badge.
 - **Widgets:** press and hold empty space anywhere on the home screen to add a widget. Hold a widget to edit it: drag to move, drag a corner to resize, tap the red X to remove, tap empty space to finish.
+- **Skins:** in Launcher Settings pick a wheel skin (record, moon, cookie, pizza and more) or your own square picture. The skin turns as you scroll.
 - **Launcher Settings:** the last entry on the folder ring. It has the comfort zone distance and the number of app rows (1 to 5), plus colors, sizes and timings.
 - **Wallpaper:** your current system wallpaper shows behind everything.
 
@@ -35,4 +36,4 @@ Open the project in Android Studio and press Run, or run `gradle assembleDebug` 
 
 ## Status
 
-Version 0.2. This is a first native build of the design, so expect rough edges.
+Version 0.3. This is a first native build of the design, so expect rough edges.

@@ -31,6 +31,7 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
     private val recent = ArrayList<String>()
     private val known = HashSet<String>()
     private val favs = ArrayList<String>()
+    private val qs = ArrayList<String>()
     private val iconCache = HashMap<String, Drawable>()
 
     init {
@@ -44,10 +45,16 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         recent.clear()
         known.clear()
         favs.clear()
+        qs.clear()
         val v1 = prefs.sp.getInt("layoutV", 1) < 2
         try {
             val o = JSONObject(prefs.sp.getString("assign", "{}") ?: "{}")
             for (k in o.keys()) assign[k] = if (v1) Folders.fromV1(o.getInt(k)) else o.getInt(k)
+        } catch (e: Exception) {
+        }
+        try {
+            val a = JSONArray(prefs.sp.getString("qs", "[]") ?: "[]")
+            for (i in 0 until a.length()) qs.add(a.getString(i))
         } catch (e: Exception) {
         }
         try {
@@ -72,7 +79,10 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         for (r in recent) a.put(r)
         val f = JSONArray()
         for (x in favs) f.put(x)
+        val q = JSONArray()
+        for (x in qs) q.put(x)
         prefs.sp.edit()
+            .putString("qs", q.toString())
             .putInt("layoutV", 2)
             .putString("favs", f.toString())
             .putString("assign", o.toString())
@@ -125,6 +135,7 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         }
         if (recent.removeAll { !keys.contains(it) }) changed = true
         if (favs.removeAll { !keys.contains(it) }) changed = true
+        if (qs.removeAll { !keys.contains(it) }) changed = true
 
         known.clear()
         known.addAll(keys)
@@ -172,7 +183,10 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
 
     fun move(a: AppEntry, folder: Int) {
         assign[a.key] = folder
-        if (folder == Folders.HIDDEN) favs.remove(a.key)
+        if (folder == Folders.HIDDEN) {
+            favs.remove(a.key)
+            qs.remove(a.key)
+        }
         save()
     }
 
@@ -190,11 +204,36 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         if (favs.remove(a.key)) save()
     }
 
+    /** Quickstart apps appear on the folder ring after the divider line. */
+    fun quickstart(): List<AppEntry> = qs.mapNotNull { byKey[it] }
+
+    fun isQuickstart(a: AppEntry): Boolean = qs.contains(a.key)
+
+    fun addQuickstart(a: AppEntry) {
+        if (!qs.contains(a.key)) {
+            qs.add(a.key)
+            save()
+        }
+    }
+
+    fun removeQuickstart(a: AppEntry) {
+        if (qs.remove(a.key)) save()
+    }
+
     fun touchRecent(key: String) {
         recent.remove(key)
         recent.add(0, key)
         while (recent.size > 8) recent.removeAt(recent.size - 1)
-        save()
+        val a = JSONArray()
+        for (r in recent) a.put(r)
+        prefs.sp.edit().putString("recent", a.toString()).apply()
+    }
+
+    /** Called when an app is opened: its green dot goes away. */
+    fun clearFreshKey(key: String) {
+        if (fresh.remove(key)) {
+            prefs.sp.edit().putStringSet("fresh", HashSet(fresh)).apply()
+        }
     }
 
     fun isFresh(key: String): Boolean = fresh.contains(key)
@@ -238,6 +277,9 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
         val a = JSONObject()
         for ((k, v) in assign) a.put(k, v)
         o.put("version", 2)
+        val qv = JSONArray()
+        for (x in qs) qv.put(x)
+        o.put("qs", qv)
         val fv = JSONArray()
         for (x in favs) fv.put(x)
         o.put("favs", fv)
@@ -254,6 +296,11 @@ class AppRepo(private val ctx: Context, private val prefs: Prefs) {
             val a = o.getJSONObject("assign")
             val old = o.optInt("version", 1) < 2
             for (k in a.keys()) assign[k] = if (old) Folders.fromV1(a.getInt(k)) else a.getInt(k)
+            val qv = o.optJSONArray("qs")
+            if (qv != null) {
+                qs.clear()
+                for (i in 0 until qv.length()) qs.add(qv.getString(i))
+            }
             val fv = o.optJSONArray("favs")
             if (fv != null) {
                 favs.clear()

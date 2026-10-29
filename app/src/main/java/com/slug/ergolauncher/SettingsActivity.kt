@@ -3,6 +3,11 @@ package com.slug.ergolauncher
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -30,6 +35,8 @@ class SettingsActivity : Activity() {
     companion object {
         private const val REQ_EXPORT = 51
         private const val REQ_IMPORT = 52
+        private const val REQ_SKIN_DISC = 53
+        private const val REQ_SKIN_CENTER = 54
     }
 
     private lateinit var prefs: Prefs
@@ -69,9 +76,48 @@ class SettingsActivity : Activity() {
         slider("Icon size", 44f, 64f, 2f, prefs.iconSize.toFloat(), { "${it.roundToInt()} dp" }) { prefs.iconSize = it.roundToInt() }
         slider("Comfort zone: distance from corner", 160f, 310f, 10f, prefs.reach.toFloat(), { "${it.roundToInt()} dp" }) { prefs.reach = it.roundToInt() }
         slider("App rows (staggered lanes)", 1f, 5f, 1f, prefs.rows.toFloat(), { "${it.roundToInt()}" }) { prefs.rows = it.roundToInt() }
+        slider("Folder ring spacing", 70f, 140f, 5f, prefs.folderSpacing.toFloat(), { "${it.roundToInt()}%" }) { prefs.folderSpacing = it.roundToInt() }
+        slider("App ring spacing", 70f, 140f, 5f, prefs.appSpacing.toFloat(), { "${it.roundToInt()}%" }) { prefs.appSpacing = it.roundToInt() }
+        addHelp("Spacing stops short of letting icons overlap, so a large icon size limits how tight it can get.")
         colorSection()
         segment("Operation", listOf("Right-handed", "Left-handed"), if (prefs.left) 1 else 0) { prefs.left = it == 1 }
         segment("Icon labels", listOf("Off", "Folders", "All"), prefs.labels) { prefs.labels = it }
+
+        head("WHEEL SKIN")
+        val skinBtn = Button(this)
+        skinBtn.isAllCaps = false
+        skinBtn.setTextColor(cText)
+        skinBtn.text = "Skin: " + Skins.NAMES[prefs.skin.coerceIn(0, Skins.NAMES.size - 1)]
+        skinBtn.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Wheel skin")
+                .setSingleChoiceItems(Skins.NAMES.toTypedArray(), prefs.skin) { d, which ->
+                    prefs.skin = which
+                    prefs.skinRev = prefs.skinRev + 1
+                    skinBtn.text = "Skin: " + Skins.NAMES[which]
+                    d.dismiss()
+                    if (which == 10 && !File(filesDir, "skin_disc.png").exists()) pickImage(REQ_SKIN_DISC)
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        val sbl = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        sbl.topMargin = dp(10)
+        col.addView(skinBtn, sbl)
+        addHelp("The skin turns as you scroll. Skins are drawn in the app.")
+        action("Choose wheel image", "Pick a picture for the wheel. Use a square image with the circle touching all four edges. It turns with the scroll.") {
+            pickImage(REQ_SKIN_DISC)
+        }
+        action("Choose center button image", "Optional picture for the round Back and start button.") {
+            pickImage(REQ_SKIN_CENTER)
+        }
+        action("Remove center button image", "Goes back to the plain accent color.") {
+            File(filesDir, "skin_center.png").delete()
+            prefs.skinRev = prefs.skinRev + 1
+            Toast.makeText(this, "Center image removed", Toast.LENGTH_SHORT).show()
+        }
+        slider("Darken skin", 0f, 70f, 5f, prefs.skinDim.toFloat(), { "${it.roundToInt()}%" }) { prefs.skinDim = it.roundToInt() }
+        addHelp("Raise this if icons are hard to see against a busy skin.")
 
         head("BEHAVIOR")
         switchRow("Remember last folder", "Open the wheel straight to the folder you used last.", prefs.remember) { prefs.remember = it }
@@ -195,6 +241,35 @@ class SettingsActivity : Activity() {
         col.addView(g)
     }
 
+    private fun addHelp(t: String) {
+        val v = label(t, 12f, cMuted)
+        v.setPadding(0, dp(4), 0, 0)
+        col.addView(v)
+    }
+
+    private fun pickImage(req: Int) {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "image/*"
+        startActivityForResult(i, req)
+    }
+
+    /** Copies the chosen picture into the app's own storage, cropped to a square. */
+    private fun saveImage(uri: Uri, name: String): Boolean {
+        val opts = BitmapFactory.Options()
+        opts.inJustDecodeBounds = true
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        var sample = 1
+        while (opts.outWidth / sample > 1400 || opts.outHeight / sample > 1400) sample *= 2
+        val o2 = BitmapFactory.Options()
+        o2.inSampleSize = sample
+        val bmp = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o2) } ?: return false
+        val side = minOf(bmp.width, bmp.height)
+        val sq = Bitmap.createBitmap(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side)
+        FileOutputStream(File(filesDir, name)).use { sq.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        return true
+    }
+
     private fun action(name: String, sub: String, run: () -> Unit) {
         val b = Button(this)
         b.text = name
@@ -268,6 +343,21 @@ class SettingsActivity : Activity() {
             if (requestCode == REQ_EXPORT) {
                 contentResolver.openOutputStream(uri)?.use { it.write(repo.exportJson().toByteArray()) }
                 Toast.makeText(this, "Layout exported", Toast.LENGTH_SHORT).show()
+            } else if (requestCode == REQ_SKIN_DISC) {
+                if (saveImage(uri, "skin_disc.png")) {
+                    prefs.skin = 10
+                    prefs.skinRev = prefs.skinRev + 1
+                    Toast.makeText(this, "Wheel image set. Pick Skin to change it back.", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Couldn't read that image", Toast.LENGTH_SHORT).show()
+                }
+            } else if (requestCode == REQ_SKIN_CENTER) {
+                if (saveImage(uri, "skin_center.png")) {
+                    prefs.skinRev = prefs.skinRev + 1
+                    Toast.makeText(this, "Center image set", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Couldn't read that image", Toast.LENGTH_SHORT).show()
+                }
             } else if (requestCode == REQ_IMPORT) {
                 val text = contentResolver.openInputStream(uri)?.use { String(it.readBytes()) } ?: ""
                 val ok = repo.importJson(text)

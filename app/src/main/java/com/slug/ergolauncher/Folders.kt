@@ -31,8 +31,8 @@ object Folders {
     /** Ring order normally. */
     val RING = listOf(FAVORITES, COMMUNICATION, GAMES, INTERNET, MEDIA, UTILITIES, OTHER, RECENT, LAUNCHER)
 
-    /** Ring order while moving an app: Hidden is a target, Launcher Settings is not. */
-    val RING_MOVE = listOf(FAVORITES, COMMUNICATION, GAMES, INTERNET, MEDIA, UTILITIES, OTHER, RECENT, HIDDEN)
+    /** Ring order while moving an app: plain folders and Hidden are targets. */
+    val RING_MOVE = listOf(COMMUNICATION, GAMES, INTERNET, MEDIA, UTILITIES, OTHER, RECENT, HIDDEN)
 
     /** Converts a v1 folder id (which had a Settings folder at 5) to the current ids. */
     fun fromV1(old: Int): Int = when (old) {

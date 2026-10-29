@@ -6,9 +6,11 @@ import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -62,6 +64,13 @@ class LauncherActivity : Activity(), WheelView.Host {
     private val entries = ArrayList<WEntry>()
     private val boxes = ArrayList<WidgetBox>()
     private var editing: WidgetBox? = null
+
+    private var appsDirty = true
+    private val pkgReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            appsDirty = true
+        }
+    }
 
     private var pendingId = -1
     private var pendingX = 0
@@ -129,6 +138,22 @@ class LauncherActivity : Activity(), WheelView.Host {
 
         setContentView(root)
         loadEntries()
+
+        val f = IntentFilter()
+        f.addAction(Intent.ACTION_PACKAGE_ADDED)
+        f.addAction(Intent.ACTION_PACKAGE_REMOVED)
+        f.addAction(Intent.ACTION_PACKAGE_CHANGED)
+        f.addAction(Intent.ACTION_PACKAGE_REPLACED)
+        f.addDataScheme("package")
+        registerReceiver(pkgReceiver, f)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(pkgReceiver)
+        } catch (e: Exception) {
+        }
     }
 
     override fun onStart() {
@@ -150,7 +175,11 @@ class LauncherActivity : Activity(), WheelView.Host {
     override fun onResume() {
         super.onResume()
         repo.loadState()
-        repo.refresh()
+        // Rescanning every app is slow, so only do it when something was installed or removed.
+        if (appsDirty) {
+            repo.refresh()
+            appsDirty = false
+        }
         wheel.reload()
         if (editing == null) buildBoxes()
     }
@@ -189,17 +218,6 @@ class LauncherActivity : Activity(), WheelView.Host {
 
     override fun onSettings() {
         startActivity(Intent(this, SettingsActivity::class.java))
-    }
-
-    override fun onRemoveFavorite(app: AppEntry, done: () -> Unit) {
-        AlertDialog.Builder(this)
-            .setMessage("Remove ${app.label} from Favorites?")
-            .setPositiveButton("Yes") { _, _ ->
-                repo.removeFavorite(app)
-                done()
-            }
-            .setNegativeButton("No", null)
-            .show()
     }
 
     override fun onLaunch(app: AppEntry) {

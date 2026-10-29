@@ -2,15 +2,19 @@ package com.slug.ergolauncher
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.io.File
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
@@ -41,7 +45,6 @@ class WheelView(
     interface Host {
         fun onSearchMode(on: Boolean)
         fun onSettings()
-        fun onRemoveFavorite(app: AppEntry, done: () -> Unit)
         fun onLaunch(app: AppEntry)
         fun onUninstall(app: AppEntry)
         fun toast(msg: String)
@@ -65,6 +68,24 @@ class WheelView(
     private var moving: AppEntry? = null
     private var from = 0
     private var delArm = false
+
+    // ---- hold menu ----
+    private class MenuItem(val label: () -> String, val danger: Boolean, val action: () -> Boolean)
+    private var menuApp: AppEntry? = null
+    private val menuItems = ArrayList<MenuItem>()
+    private var menuX = 0f
+    private var menuY = 0f
+    private var menuGuard = false
+    private val menuRectF = RectF()
+
+    // ---- skin ----
+    private var skinBmp: Bitmap? = null
+    private var centerBmp: Bitmap? = null
+    private var skinKey = -1
+    private var skinRot = 0f
+    private val clip = Path()
+    private val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val dstRect = RectF()
 
     // ---- animated geometry ----
     private var bigR = 0f
@@ -162,10 +183,51 @@ class WheelView(
     private fun lo(n: Int, step: Float): Float = min(0f, 82f - (START + step * (n - 1)))
 
     /** Angle between neighbouring apps. A single lane needs more room than a zigzag. */
-    private fun astep(): Float = when (prefs.rows) {
-        1 -> 15f
-        2, 3 -> 13f
-        else -> 14f
+    private fun astep(): Float {
+        val base = when (prefs.rows) {
+            1 -> 15f
+            2, 3 -> 13f
+            else -> 14f
+        } * prefs.appSpacing / 100f
+        val factor = if (prefs.rows == 1) 1.08f else 0.62f
+        val r = laneR(prefs.rows - 1) * prefs.wheelSize
+        val minDeg = Math.toDegrees((prefs.iconSize * factor / r).toDouble()).toFloat()
+        return max(base, minDeg)
+    }
+
+    /** Angle between neighbouring bubbles on the folder ring. Never so tight that icons overlap. */
+    private fun cstep(): Float {
+        val base = CSTEP * prefs.folderSpacing / 100f
+        val r = (reachDp() - 32f) * prefs.wheelSize
+        val minDeg = Math.toDegrees((prefs.iconSize * 1.08f / r).toDouble()).toFloat()
+        return max(base, minDeg)
+    }
+
+    private fun qsList(): List<AppEntry> = if (moving != null) emptyList() else repo.quickstart()
+
+    /** Angle offset of the divider line and of each Quickstart app on the folder ring. */
+    private fun divOffset(): Float = (catCount() - 1) * cstep() + cstep() * 0.625f
+
+    private fun qsOffset(j: Int): Float = (catCount() - 1) * cstep() + cstep() * 1.25f + j * cstep()
+
+    private fun ringEnd(): Float {
+        val q = qsList().size
+        return if (q == 0) (catCount() - 1) * cstep() else qsOffset(q - 1)
+    }
+
+    private fun loFor(s: Int): Float =
+        if (s == 1) min(0f, 82f - (START + ringEnd())) else lo(curList().size, astep())
+
+    /** Sets a ring's scroll and turns the skin by the same amount. */
+    private fun setScroll(s: Int, nv: Float) {
+        val cur = if (s == 1) cscroll else scroll
+        skinRot += nv - cur
+        if (s == 1) cscroll = nv else scroll = nv
+    }
+
+    private fun fixScroll() {
+        cscroll = clampFor(1, cscroll)
+        scroll = clampFor(2, scroll)
     }
 
     private fun ringIds(): List<Int> = if (moving != null) Folders.RING_MOVE else Folders.RING
@@ -202,10 +264,7 @@ class WheelView(
         return repo.inFolder(cat)
     }
 
-    private fun clampFor(s: Int, v: Float): Float {
-        val n = if (s == 1) catCount() else curList().size
-        return max(lo(n, if (s == 1) CSTEP else astep()), min(0f, v))
-    }
+    private fun clampFor(s: Int, v: Float): Float = max(loFor(s), min(0f, v))
 
     private fun lum(c: Int): Float {
         fun ch(v: Int): Float {
@@ -239,6 +298,7 @@ class WheelView(
     }
 
     fun collapse() {
+        closeMenu()
         moving = null
         delArm = false
         if (stage != 0) setStage(0)
@@ -271,13 +331,13 @@ class WheelView(
                 val cur = if (st == 1) cscroll else scroll
                 val want = cur + flingV * dt
                 val nv = clampFor(st, want)
-                val step = if (st == 1) CSTEP else astep()
+                val step = if (st == 1) cstep() else astep()
                 val idx = (-nv / step).roundToInt()
                 if (idx != lastTick) {
                     lastTick = idx
                     haptic(HapticFeedbackConstants.CLOCK_TICK)
                 }
-                if (st == 1) cscroll = nv else scroll = nv
+                setScroll(st, nv)
                 flingV *= exp(-3.5f * dt)
                 invalidate()
                 if (abs(flingV) < 25f || nv != want) {
@@ -344,16 +404,15 @@ class WheelView(
         val fg = if (lum(accent) > 0.35f) cDark else Color.WHITE
 
         if (stage > 0) {
-            fill.color = Color.argb((prefs.wheelOpacity * 255).roundToInt(), 24, 28, 36)
-            canvas.drawCircle(pivX(), pivY(), bigR, fill)
+            drawDisc(canvas)
             stroke.color = Color.parseColor("#2A303C")
             stroke.strokeWidth = u
             canvas.drawCircle(pivX(), pivY(), bigR, stroke)
             drawScrollbar(canvas, k, accent)
             if (stage == 1) drawCats(canvas, k, accent) else drawApps(canvas, k, accent)
-            drawSideButtons(canvas)
         }
         drawBackButton(canvas, accent, fg)
+        if (menuApp != null) drawMenu(canvas, accent)
 
         if (pressing) postInvalidateOnAnimation()
     }
@@ -420,10 +479,54 @@ class WheelView(
         c.drawArc(arcRect(r), start, a2 - a1, false, p)
     }
 
+    private fun loadFile(name: String): Bitmap? {
+        return try {
+            val f = File(context.filesDir, name)
+            if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Loads the skin pictures again when the skin choice or an image changed. */
+    private fun refreshSkin() {
+        val key = prefs.skin * 100000 + prefs.skinRev
+        if (key == skinKey) return
+        skinKey = key
+        skinBmp = when (prefs.skin) {
+            0 -> null
+            10 -> loadFile("skin_disc.png")
+            else -> SkinArt.make(prefs.skin, 720)
+        }
+        centerBmp = loadFile("skin_center.png")
+    }
+
+    private fun drawDisc(c: Canvas) {
+        refreshSkin()
+        val bmp = skinBmp
+        if (bmp == null) {
+            fill.color = Color.argb((prefs.wheelOpacity * 255).roundToInt(), 24, 28, 36)
+            c.drawCircle(pivX(), pivY(), bigR, fill)
+            return
+        }
+        clip.reset()
+        clip.addCircle(pivX(), pivY(), bigR, Path.Direction.CW)
+        c.save()
+        c.clipPath(clip)
+        if (prefs.left) c.scale(-1f, 1f, pivX(), pivY())
+        c.rotate(skinRot, pivX(), pivY())
+        bmpPaint.alpha = a255(prefs.wheelOpacity)
+        dstRect.set(pivX() - bigR, pivY() - bigR, pivX() + bigR, pivY() + bigR)
+        c.drawBitmap(bmp, null, dstRect, bmpPaint)
+        c.restore()
+        if (prefs.skinDim > 0) {
+            fill.color = Color.argb((prefs.skinDim * 255 / 100), 0, 0, 0)
+            c.drawCircle(pivX(), pivY(), bigR, fill)
+        }
+    }
+
     private fun drawScrollbar(c: Canvas, k: Float, accent: Int) {
-        val n = if (stage == 1) catCount() else curList().size
-        val step = if (stage == 1) CSTEP else astep()
-        val loV = lo(n, step)
+        val loV = loFor(stage)
         val sc = if (stage == 1) cscroll else scroll
         val len = if (loV < 0) (78f * 90f / (90f - loV)).coerceIn(14f, 78f) else 78f
         val pos = if (loV < 0) (sc / loV).coerceIn(0f, 1f) else 0f
@@ -447,7 +550,7 @@ class WheelView(
         val ids = ringIds()
         for (i in 0 until count) {
             val id = ids[i]
-            val a = START + CSTEP * i + cscroll
+            val a = START + cstep() * i + cscroll
             if (a <= MINA || a >= MAXA) continue
             val r = (reachDp() - 32f) * k * u
             val cx = px(r, a)
@@ -461,62 +564,210 @@ class WheelView(
             }
             hits.add(Hit(1, id, cx, cy, half))
         }
+
+        val qsl = qsList()
+        if (qsl.isNotEmpty()) {
+            val rr = (reachDp() - 32f) * k * u
+            val da = START + divOffset() + cscroll
+            if (da > MINA && da < MAXA) {
+                stroke.strokeWidth = 2.5f * u
+                stroke.strokeCap = Paint.Cap.ROUND
+                stroke.color = Color.argb(a255(0.7f * fade), 236, 239, 244)
+                c.drawLine(px(rr - 30 * u, da), py(rr - 30 * u, da), px(rr + 30 * u, da), py(rr + 30 * u, da), stroke)
+                stroke.strokeCap = Paint.Cap.BUTT
+            }
+            for (j in qsl.indices) {
+                val a = START + qsOffset(j) + cscroll
+                if (a <= MINA || a >= MAXA) continue
+                val cx = px(rr, a)
+                val cy = py(rr, a)
+                drawAppBubble(c, qsl[j], cx, cy, accent)
+                hits.add(Hit(6, j, cx, cy, half))
+            }
+        }
+    }
+
+    private fun drawAppBubble(c: Canvas, app: AppEntry, cx: Float, cy: Float, accent: Int) {
+        val isz = prefs.iconSize * u
+        val half = isz / 2
+        val pressed = pressing && pressKey == app.key
+        val sc = if (pressed) 1f + 0.3f * pressProgress() else 1f
+        c.save()
+        c.scale(sc, sc, cx, cy)
+        drawBubble(c, cx, cy, half, if (pressed) accent else cBorder, cBubble, fade)
+        val ic = repo.icon(app)
+        val sz = isz * 0.74f
+        ic.setBounds(
+            (cx - sz / 2).roundToInt(), (cy - sz / 2).roundToInt(),
+            (cx + sz / 2).roundToInt(), (cy + sz / 2).roundToInt()
+        )
+        ic.alpha = a255(fade)
+        ic.draw(c)
+        c.restore()
+        if (repo.isFresh(app.key)) {
+            val dx = cx + half * 0.55f
+            val dy = cy - half + 2 * u
+            fill.color = Color.parseColor("#12141A")
+            fill.alpha = a255(fade)
+            c.drawCircle(dx, dy, 7 * u, fill)
+            fill.color = cGreen
+            fill.alpha = a255(fade)
+            c.drawCircle(dx, dy, 5 * u, fill)
+        }
+        if (prefs.labels == 2) {
+            val label = if (app.label.length > 12) app.label.substring(0, 11) + "…" else app.label
+            drawText(c, label, cx, cy + half + 13 * u, 10f, fade)
+        }
     }
 
     private fun drawApps(c: Canvas, k: Float, accent: Int) {
         val list = curList()
-        val isz = prefs.iconSize * u
-        val half = isz / 2
+        val half = prefs.iconSize * u / 2
         for (i in list.indices) {
-            val app = list[i]
             val a = START + astep() * i + scroll
             if (a <= MINA || a >= MAXA) continue
             val r = laneR(laneOf(i)) * k * u
             val cx = px(r, a)
             val cy = py(r, a)
-            val pressed = pressing && pressKey == app.key
-            val s = if (pressed) 1f + 0.3f * pressProgress() else 1f
-            c.save()
-            c.scale(s, s, cx, cy)
-            drawBubble(c, cx, cy, half, if (pressed) accent else cBorder, cBubble, fade)
-            val ic = repo.icon(app)
-            val sz = isz * 0.74f
-            ic.setBounds(
-                (cx - sz / 2).roundToInt(), (cy - sz / 2).roundToInt(),
-                (cx + sz / 2).roundToInt(), (cy + sz / 2).roundToInt()
-            )
-            ic.alpha = a255(fade)
-            ic.draw(c)
-            c.restore()
-            if (repo.isFresh(app.key)) {
-                val dx = cx + half * 0.55f
-                val dy = cy - half + 2 * u
-                fill.color = Color.parseColor("#12141A")
-                fill.alpha = a255(fade)
-                c.drawCircle(dx, dy, 7 * u, fill)
-                fill.color = cGreen
-                fill.alpha = a255(fade)
-                c.drawCircle(dx, dy, 5 * u, fill)
-            }
-            if (prefs.labels == 2) {
-                val label = if (app.label.length > 12) app.label.substring(0, 11) + "…" else app.label
-                drawText(c, label, cx, cy + half + 13 * u, 10f, fade)
-            }
+            drawAppBubble(c, list[i], cx, cy, accent)
             hits.add(Hit(2, i, cx, cy, half))
         }
     }
 
-    private fun drawSideButtons(c: Canvas) {
-        val cx = if (prefs.left) width - 56 * u else 56 * u
-        val cy = pivY() - 112 * u
-        val r = 32 * u
-        val m = moving
-        if (stage == 1 && m != null) {
-            drawBubble(c, cx, cy, r, if (delArm) Color.WHITE else cRed, if (delArm) cRed else cBubble, 1f)
-            drawGlyph(c, icTrash, cx, cy, 26 * u, Color.WHITE, 1f)
-            drawText(c, if (delArm) "Tap again to uninstall" else "Uninstall", cx, cy + r + 16 * u, 11f, 1f)
-            hits.add(Hit(3, 0, cx, cy, r))
+    // ---- hold menu ----
+
+    private fun openMenu(app: AppEntry, x: Float, y: Float) {
+        menuApp = app
+        menuX = x
+        menuY = y
+        menuGuard = true
+        delArm = false
+        menuItems.clear()
+        menuItems.add(MenuItem({ if (repo.isFavorite(app)) "Remove from Favorites" else "Add to Favorites" }, false) {
+            if (repo.isFavorite(app)) {
+                repo.removeFavorite(app)
+                host?.toast("Removed ${app.label} from Favorites")
+            } else {
+                repo.addFavorite(app)
+                host?.toast("Added ${app.label} to Favorites")
+            }
+            true
+        })
+        menuItems.add(MenuItem({ if (repo.isQuickstart(app)) "Unpin from Quickstart" else "Pin to Quickstart" }, false) {
+            if (repo.isQuickstart(app)) {
+                repo.removeQuickstart(app)
+                host?.toast("Unpinned ${app.label}")
+            } else {
+                repo.addQuickstart(app)
+                host?.toast("Pinned ${app.label} to Quickstart")
+            }
+            true
+        })
+        menuItems.add(MenuItem({ "Move" }, false) {
+            closeMenu()
+            startMove(app)
+            false
+        })
+        if (repo.folderOf(app) != Folders.HIDDEN) {
+            menuItems.add(MenuItem({ "Hide" }, false) {
+                repo.move(app, Folders.HIDDEN)
+                host?.toast("${app.label} is now hidden")
+                true
+            })
         }
+        menuItems.add(MenuItem({ if (delArm) "Tap again to uninstall" else "Uninstall" }, true) {
+            if (!delArm) {
+                delArm = true
+                uiHandler.removeCallbacks(disarm)
+                uiHandler.postDelayed(disarm, 3000)
+                invalidate()
+                false
+            } else {
+                closeMenu()
+                host?.onUninstall(app)
+                false
+            }
+        })
+        haptic(HapticFeedbackConstants.LONG_PRESS)
+        invalidate()
+    }
+
+    private fun closeMenu() {
+        menuApp = null
+        menuItems.clear()
+        delArm = false
+        uiHandler.removeCallbacks(disarm)
+        invalidate()
+    }
+
+    private fun layoutMenu(): RectF {
+        val w = 220 * u
+        val h = 46 * u * menuItems.size + 8 * u
+        val x = (menuX - w / 2).coerceIn(8 * u, max(8 * u, width - w - 8 * u))
+        var y = menuY - 36 * u - h
+        if (y < 8 * u) y = menuY + 36 * u
+        if (y + h > height - 8 * u) y = max(8 * u, height - h - 8 * u)
+        menuRectF.set(x, y, x + w, y + h)
+        return menuRectF
+    }
+
+    private fun menuIndexAt(px: Float, py: Float): Int {
+        val r = layoutMenu()
+        if (px < r.left || px > r.right || py < r.top + 4 * u || py > r.bottom - 4 * u) return -1
+        val i = ((py - r.top - 4 * u) / (46 * u)).toInt()
+        return if (i in menuItems.indices) i else -1
+    }
+
+    private fun drawMenu(c: Canvas, accent: Int) {
+        fill.color = Color.argb(110, 0, 0, 0)
+        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+        val r = layoutMenu()
+        fill.color = Color.argb(248, 28, 32, 41)
+        c.drawRoundRect(r, 18 * u, 18 * u, fill)
+        stroke.color = cBorder
+        stroke.strokeWidth = u
+        c.drawRoundRect(r, 18 * u, 18 * u, stroke)
+        text.textAlign = Paint.Align.LEFT
+        text.textSize = 15 * u
+        text.typeface = Typeface.DEFAULT
+        for (i in menuItems.indices) {
+            val it = menuItems[i]
+            val top = r.top + 4 * u + 46 * u * i
+            if (i > 0) {
+                stroke.color = Color.argb(60, 236, 239, 244)
+                c.drawLine(r.left + 14 * u, top, r.right - 14 * u, top, stroke)
+            }
+            text.color = if (it.danger) Color.parseColor("#FF6B6B") else cLight
+            text.alpha = 255
+            c.drawText(it.label(), r.left + 18 * u, top + 29 * u, text)
+        }
+        text.textAlign = Paint.Align.CENTER
+    }
+
+    private fun menuTouch(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> menuGuard = false
+            MotionEvent.ACTION_UP -> {
+                if (menuGuard) {
+                    // the lift that ends the hold which opened the menu
+                    menuGuard = false
+                    return true
+                }
+                val i = menuIndexAt(e.x, e.y)
+                if (i >= 0) {
+                    val closeIt = menuItems[i].action()
+                    if (closeIt) {
+                        closeMenu()
+                        fixScroll()
+                    }
+                } else {
+                    closeMenu()
+                }
+                invalidate()
+            }
+            MotionEvent.ACTION_CANCEL -> menuGuard = false
+        }
+        return true
     }
 
     private fun drawBackButton(c: Canvas, accent: Int, fg: Int) {
@@ -529,6 +780,19 @@ class WheelView(
         fill.color = accent
         fill.alpha = 255
         c.drawCircle(pivX(), pivY(), r, fill)
+        refreshSkin()
+        val cb = centerBmp
+        if (cb != null) {
+            clip.reset()
+            clip.addCircle(pivX(), pivY(), r, Path.Direction.CW)
+            c.save()
+            c.clipPath(clip)
+            if (prefs.left) c.scale(-1f, 1f, pivX(), pivY())
+            bmpPaint.alpha = 255
+            dstRect.set(pivX() - r, pivY() - r, pivX() + r, pivY() + r)
+            c.drawBitmap(cb, null, dstRect, bmpPaint)
+            c.restore()
+        }
         stroke.color = Color.parseColor("#343C4B")
         stroke.strokeWidth = u
         stroke.alpha = 255
@@ -581,6 +845,7 @@ class WheelView(
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (menuApp != null) return menuTouch(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val h = hitAt(e.x, e.y)
@@ -596,7 +861,7 @@ class WheelView(
                 downY = e.y
                 moved = false
                 longFired = false
-                dragging = stage >= 1 && (h == null || h.kind == 1 || h.kind == 2)
+                dragging = stage >= 1 && (h == null || h.kind == 1 || h.kind == 2 || h.kind == 6)
                 if (dragging) {
                     dragA0 = ang(e.x, e.y)
                     velAng = dragA0
@@ -605,11 +870,22 @@ class WheelView(
                     lastTick = -1
                 }
                 if (h != null) {
-                    if (h.kind == 2 && stage == 2 && cat != Folders.RECENT && moving == null) {
+                    if (h.kind == 2 && stage == 2 && moving == null) {
                         val list = curList()
                         if (h.idx < list.size) {
                             val app = list[h.idx]
-                            scheduleHold((prefs.holdMove * 1000).toLong()) { startMove(app) }
+                            val hx = h.x
+                            val hy = h.y
+                            scheduleHold((prefs.holdMove * 1000).toLong()) { openMenu(app, hx, hy) }
+                            pressKey = app.key
+                        }
+                    } else if (h.kind == 6 && stage == 1 && moving == null) {
+                        val ql = qsList()
+                        if (h.idx < ql.size) {
+                            val app = ql[h.idx]
+                            val hx = h.x
+                            val hy = h.y
+                            scheduleHold((prefs.holdMove * 1000).toLong()) { openMenu(app, hx, hy) }
                             pressKey = app.key
                         }
                     } else if (h.kind == 5 && stage == 1 && moving == null) {
@@ -627,13 +903,13 @@ class WheelView(
                 }
                 if (moved && dragging) {
                     val nv = clampFor(stage, dragS0 + (ang(e.x, e.y) - dragA0))
-                    val step = if (stage == 1) CSTEP else astep()
+                    val step = if (stage == 1) cstep() else astep()
                     val idx = (-nv / step).roundToInt()
                     if (idx != lastTick) {
                         lastTick = idx
                         haptic(HapticFeedbackConstants.CLOCK_TICK)
                     }
-                    if (stage == 1) cscroll = nv else scroll = nv
+                    setScroll(stage, nv)
                     val now = SystemClock.uptimeMillis()
                     val a = ang(e.x, e.y)
                     val dtm = now - velT
@@ -673,15 +949,24 @@ class WheelView(
             1 -> chooseCat(h.idx)
             2 -> {
                 val list = curList()
-                if (h.idx < list.size) {
-                    val app = list[h.idx]
-                    haptic(HapticFeedbackConstants.VIRTUAL_KEY)
-                    if (cat != Folders.RECENT) repo.touchRecent(app.key)
-                    host?.onLaunch(app)
-                }
+                if (h.idx < list.size) launch(list[h.idx])
             }
-            3 -> trash()
+            6 -> {
+                val ql = qsList()
+                if (h.idx < ql.size) launch(ql[h.idx])
+            }
             5 -> backTap()
+        }
+    }
+
+    /** Opens the app first, then does the bookkeeping, so the tap never waits on storage. */
+    private fun launch(app: AppEntry) {
+        haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+        host?.onLaunch(app)
+        uiHandler.post {
+            repo.clearFreshKey(app.key)
+            if (cat != Folders.RECENT) repo.touchRecent(app.key)
+            invalidate()
         }
     }
 
@@ -763,23 +1048,14 @@ class WheelView(
                 }
             }
             else -> {
-                repo.clearFresh(cat)
                 setStage(1)
             }
         }
     }
 
     private fun startMove(app: AppEntry) {
-        if (cat == Folders.FAVORITES) {
-            haptic(HapticFeedbackConstants.LONG_PRESS)
-            host?.onRemoveFavorite(app) {
-                scroll = clampFor(2, scroll)
-                invalidate()
-            }
-            return
-        }
         moving = app
-        from = cat
+        from = repo.folderOf(app)
         cscroll = 0f
         delArm = false
         haptic(HapticFeedbackConstants.LONG_PRESS)
@@ -792,24 +1068,6 @@ class WheelView(
         query = ""
         haptic(HapticFeedbackConstants.LONG_PRESS)
         setStage(2)
-    }
-
-    private fun trash() {
-        val m = moving ?: return
-        if (!delArm) {
-            delArm = true
-            uiHandler.removeCallbacks(disarm)
-            uiHandler.postDelayed(disarm, 3000)
-            invalidate()
-        } else {
-            uiHandler.removeCallbacks(disarm)
-            delArm = false
-            moving = null
-            cat = from
-            scroll = 0f
-            setStage(2)
-            host?.onUninstall(m)
-        }
     }
 
     override fun onDetachedFromWindow() {
